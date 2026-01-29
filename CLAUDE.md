@@ -32,6 +32,11 @@ cd dagger && npm run pipeline:helm-test
 
 # Teardown cluster and registry
 ./scripts/teardown.sh
+
+# Test deployed app from outside the cluster (via Traefik ingress)
+curl -H "Host: sample-app.local" http://localhost/health
+curl -H "Host: sample-app.local" http://localhost/health/ready
+curl -H "Host: sample-app.local" http://localhost/health/live
 ```
 
 Environment variables for the pipeline:

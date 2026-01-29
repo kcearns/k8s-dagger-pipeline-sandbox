@@ -205,11 +205,16 @@ kubectl get pods -l app.kubernetes.io/name=sample-app
 # Check service
 kubectl get svc sample-app
 
+# Test via Traefik ingress (from host machine)
+curl -H "Host: sample-app.local" http://localhost/health
+curl -H "Host: sample-app.local" http://localhost/health/ready
+curl -H "Host: sample-app.local" http://localhost/health/live
+
 # Test from within cluster
 kubectl run curl-test --image=curlimages/curl --rm -it --restart=Never -- \
   curl -s http://sample-app/health
 
-# Port forward to access locally
+# Port forward to access locally (alternative to ingress)
 kubectl port-forward svc/sample-app 8080:80
 curl http://localhost:8080/health
 ```
