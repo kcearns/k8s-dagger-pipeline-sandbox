@@ -58,6 +58,26 @@ EOF"
   ok "Containerd configured for local registry"
 fi
 
+# --- Install Traefik Ingress Controller ---
+if kubectl get deploy traefik -n kube-system &>/dev/null; then
+  ok "Traefik ingress controller already installed"
+else
+  info "Installing Traefik ingress controller..."
+  helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true
+  helm repo update traefik
+  helm install traefik traefik/traefik -n kube-system \
+    --set service.type=ClusterIP \
+    --set ports.web.port=80 \
+    --set ports.websecure.port=443 \
+    --set hostNetwork=true \
+    --set ingressClass.enabled=true \
+    --set ingressClass.isDefaultClass=true \
+    --set providers.kubernetesIngress.enabled=true
+  info "Waiting for Traefik to be ready..."
+  kubectl rollout status deploy/traefik -n kube-system --timeout=120s
+  ok "Traefik ingress controller installed"
+fi
+
 # --- Install npm dependencies ---
 info "Installing app dependencies..."
 (cd "${PROJECT_ROOT}" && npm install)
