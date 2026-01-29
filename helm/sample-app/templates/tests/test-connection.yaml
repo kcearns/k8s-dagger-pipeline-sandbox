@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "sample-app.fullname" . }}-test-connection
+  labels:
+    {{- include "sample-app.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: health-check
+      image: curlimages/curl:8.11.1
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "Testing health endpoint..."
+          curl -sf http://{{ include "sample-app.fullname" . }}:{{ .Values.service.port }}/health || exit 1
+          echo ""
+          echo "Testing readiness endpoint..."
+          curl -sf http://{{ include "sample-app.fullname" . }}:{{ .Values.service.port }}/health/ready || exit 1
+          echo ""
+          echo "Testing liveness endpoint..."
+          curl -sf http://{{ include "sample-app.fullname" . }}:{{ .Values.service.port }}/health/live || exit 1
+          echo ""
+          echo "All health checks passed!"
