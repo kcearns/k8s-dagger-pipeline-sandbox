@@ -1,0 +1,31 @@
+name: Deploy Prod
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yaml
+    secrets: inherit
+
+  approve:
+    name: Approve production deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approved
+        run: echo "Production deployment approved"
+
+  deploy:
+    needs: approve
+    uses: ./.github/workflows/deploy-env.yaml
+    with:
+      environment: production
+      deploy_env: prod
+    secrets: inherit

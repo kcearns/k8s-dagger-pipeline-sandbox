@@ -1,0 +1,82 @@
+name: Deploy to environment (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment name (dev, staging, production)
+        required: true
+        type: string
+      deploy_env:
+        description: DEPLOY_ENV value (dev, staging, prod)
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.deploy_env }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install pipeline dependencies
+        run: cd dagger && npm ci
+
+      - name: Install Dagger CLI
+        uses: dagger/dagger-for-github@v7
+        with:
+          install-only: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configure kubectl for EKS
+        run: aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ secrets.AWS_REGION }}"
+
+      - name: Set image tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        run: cd dagger && npm run pipeline:deploy
+        env:
+          DEPLOY_ENV: ${{ inputs.deploy_env }}
+          DEPLOYMENT_TARGET: eks
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPO_URI: ${{ secrets.ECR_REPO_URI }}
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Helm Test
+        run: cd dagger && npm run pipeline:helm-test
+        env:
+          DEPLOY_ENV: ${{ inputs.deploy_env }}
+          DEPLOYMENT_TARGET: eks
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPO_URI: ${{ secrets.ECR_REPO_URI }}
+          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}

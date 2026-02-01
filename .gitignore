@@ -2,5 +2,9 @@ node_modules/
 dist/
 *.js.map
 .env
+.env.eks
 dagger/node_modules/
+cdk/node_modules/
+cdk/cdk.out/
+cdk/outputs.json
 .claude/
