@@ -9,7 +9,8 @@
     "pipeline:deploy": "dagger run tsx src/index.ts deploy",
     "pipeline:lint": "eslint 'src/**/*.ts'",
     "pipeline:chart-lint": "dagger run tsx src/index.ts chart-lint",
-    "pipeline:helm-test": "dagger run tsx src/index.ts helm-test"
+    "pipeline:helm-test": "dagger run tsx src/index.ts helm-test",
+    "pipeline:deploy-all": "dagger run tsx src/index.ts deploy-all"
   },
   "dependencies": {
     "@dagger.io/dagger": "^0.19.2"

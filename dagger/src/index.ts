@@ -1,16 +1,34 @@
 import { dag, Container, Directory } from "@dagger.io/dagger";
 import * as dagger from "@dagger.io/dagger";
 import { execSync } from "child_process";
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { tmpdir } from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const REGISTRY = "localhost:5001";
-const IMAGE_NAME = `${REGISTRY}/sample-app`;
-const CHART_REPO = `oci://${REGISTRY}/charts`;
+// Deployment target: "kind" (default) or "eks"
+const DEPLOYMENT_TARGET = process.env.DEPLOYMENT_TARGET || "kind";
+const AWS_REGION = process.env.AWS_REGION || "us-east-1";
+const AWS_ACCOUNT_ID = process.env.AWS_ACCOUNT_ID || "";
+const ECR_REPO_URI = process.env.ECR_REPO_URI || "";
+
+// Registry selection based on deployment target
+const REGISTRY =
+  DEPLOYMENT_TARGET === "eks"
+    ? `${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com`
+    : "localhost:5001";
+const IMAGE_NAME =
+  DEPLOYMENT_TARGET === "eks"
+    ? ECR_REPO_URI
+    : `${REGISTRY}/sample-app`;
+const CHART_REPO =
+  DEPLOYMENT_TARGET === "eks"
+    ? `oci://${REGISTRY}/charts`
+    : "oci://localhost:5001/charts";
+
 const IMAGE_TAG = process.env.IMAGE_TAG || "latest";
 const DEPLOY_ENV = process.env.DEPLOY_ENV || "dev";
 const FULL_IMAGE = `${IMAGE_NAME}:${IMAGE_TAG}`;
@@ -80,8 +98,48 @@ async function chartLint(): Promise<void> {
   }
 }
 
+function ecrLogin(): void {
+  console.log("🔑 Logging into ECR...");
+  execSync(
+    `aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}`,
+    { stdio: "inherit" }
+  );
+}
+
+function helmLoginEcr(): void {
+  console.log("🔑 Logging Helm into ECR...");
+  execSync(
+    `aws ecr get-login-password --region ${AWS_REGION} | helm registry login --username AWS --password-stdin ${REGISTRY}`,
+    { stdio: "inherit" }
+  );
+}
+
+function getEnvironmentFile(env: string): string {
+  if (DEPLOYMENT_TARGET === "eks") {
+    return resolve(environmentsDir, `eks-${env}.yaml`);
+  }
+  return resolve(environmentsDir, `${env}.yaml`);
+}
+
+function substituteEcrUri(valuesFile: string): string {
+  if (DEPLOYMENT_TARGET !== "eks" || !ECR_REPO_URI) {
+    return valuesFile;
+  }
+
+  const content = readFileSync(valuesFile, "utf-8");
+  const substituted = content.replace(/\$\{ECR_REPO_URI\}/g, ECR_REPO_URI);
+  const tmpFile = resolve(tmpdir(), `values-${Date.now()}.yaml`);
+  writeFileSync(tmpFile, substituted);
+  return tmpFile;
+}
+
 async function build(): Promise<string> {
   console.log(`🔨 Building image ${FULL_IMAGE}...`);
+
+  if (DEPLOYMENT_TARGET === "eks") {
+    ecrLogin();
+    helmLoginEcr();
+  }
 
   execSync(`docker build -t ${FULL_IMAGE} ${projectRoot}`, {
     stdio: "inherit",
@@ -105,10 +163,11 @@ async function build(): Promise<string> {
   return FULL_IMAGE;
 }
 
-async function deploy(): Promise<void> {
-  console.log(`🚀 Deploying to Kubernetes (env: ${DEPLOY_ENV})...`);
+async function deploy(env?: string): Promise<void> {
+  const targetEnv = env || DEPLOY_ENV;
+  console.log(`🚀 Deploying to Kubernetes (env: ${targetEnv}, target: ${DEPLOYMENT_TARGET})...`);
 
-  const valuesFile = resolve(environmentsDir, `${DEPLOY_ENV}.yaml`);
+  const valuesFile = getEnvironmentFile(targetEnv);
 
   if (!existsSync(valuesFile)) {
     throw new Error(
@@ -116,39 +175,100 @@ async function deploy(): Promise<void> {
     );
   }
 
+  const resolvedValuesFile = substituteEcrUri(valuesFile);
+
   try {
+    const namespaceArgs: string[] = [];
+    if (DEPLOYMENT_TARGET === "eks") {
+      // Ensure namespace exists
+      try {
+        execSync(`kubectl create namespace ${targetEnv} --dry-run=client -o yaml | kubectl apply -f -`, {
+          stdio: "inherit",
+        });
+      } catch {
+        // Namespace may already exist
+      }
+      namespaceArgs.push(`--namespace ${targetEnv}`);
+    }
+
+    const releaseName =
+      DEPLOYMENT_TARGET === "eks" ? `sample-app-${targetEnv}` : "sample-app";
     const helmCmd = [
-      "helm upgrade --install sample-app",
+      `helm upgrade --install ${releaseName}`,
       `${CHART_REPO}/sample-app`,
-      `-f ${valuesFile}`,
+      `-f ${resolvedValuesFile}`,
       `--set image.tag=${IMAGE_TAG}`,
+      ...namespaceArgs,
       "--wait",
       "--timeout 120s",
     ].join(" ");
 
     execSync(helmCmd, { stdio: "inherit" });
 
-    console.log("✅ Deployment complete!");
+    console.log(`✅ Deployment to ${targetEnv} complete!`);
+
+    if (DEPLOYMENT_TARGET === "eks") {
+      // Print ALB DNS if available
+      try {
+        const ingress = execSync(
+          `kubectl get ingress -n ${targetEnv} -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null`,
+          { encoding: "utf-8" }
+        ).trim();
+        if (ingress) {
+          console.log(`🌐 ALB DNS: ${ingress}`);
+        }
+      } catch {
+        console.log("ℹ️  ALB DNS not yet available (may take a few minutes)");
+      }
+    }
   } catch (error) {
-    console.error("❌ Deployment failed:", error);
+    console.error(`❌ Deployment to ${targetEnv} failed:`, error);
     throw error;
   }
 }
 
-async function helmTest(): Promise<void> {
-  console.log("🧪 Running Helm tests...");
+async function helmTest(env?: string): Promise<void> {
+  const targetEnv = env || DEPLOY_ENV;
+  console.log(`🧪 Running Helm tests (env: ${targetEnv})...`);
 
   try {
-    execSync("helm test sample-app --timeout 60s", { stdio: "inherit" });
-    console.log("✅ Helm tests passed!");
+    const releaseName =
+      DEPLOYMENT_TARGET === "eks" ? `sample-app-${targetEnv}` : "sample-app";
+    const namespaceArgs =
+      DEPLOYMENT_TARGET === "eks" ? `--namespace ${targetEnv}` : "";
+    execSync(`helm test ${releaseName} ${namespaceArgs} --timeout 60s`.trim(), {
+      stdio: "inherit",
+    });
+    console.log(`✅ Helm tests passed for ${targetEnv}!`);
   } catch (error) {
-    console.error("❌ Helm tests failed:", error);
+    console.error(`❌ Helm tests failed for ${targetEnv}:`, error);
     throw error;
   }
+}
+
+async function deployAll(): Promise<void> {
+  console.log("🚀 Deploying to all environments...\n");
+
+  const environments = ["dev", "staging", "prod"];
+
+  for (const env of environments) {
+    console.log(`\n${"=".repeat(50)}`);
+    console.log(`📦 Deploying to ${env}...\n`);
+    await deploy(env);
+
+    console.log(`\n🧪 Testing ${env}...\n`);
+    await helmTest(env);
+
+    console.log(`\n✅ ${env} complete!\n`);
+  }
+
+  console.log("=".repeat(50));
+  console.log("🎉 All environments deployed and tested!");
 }
 
 async function pipeline(): Promise<void> {
   console.log("🚀 Starting CI/CD Pipeline\n");
+  console.log(`   Target: ${DEPLOYMENT_TARGET}`);
   console.log("=".repeat(50));
 
   console.log("\n📦 Stage 1: Lint\n");
@@ -163,11 +283,16 @@ async function pipeline(): Promise<void> {
   console.log("\n📦 Stage 4: Build & Push\n");
   await build();
 
-  console.log("\n📦 Stage 5: Deploy\n");
-  await deploy();
+  if (DEPLOYMENT_TARGET === "eks") {
+    console.log("\n📦 Stage 5: Deploy All Environments\n");
+    await deployAll();
+  } else {
+    console.log("\n📦 Stage 5: Deploy\n");
+    await deploy();
 
-  console.log("\n📦 Stage 6: Helm Test\n");
-  await helmTest();
+    console.log("\n📦 Stage 6: Helm Test\n");
+    await helmTest();
+  }
 
   console.log("\n" + "=".repeat(50));
   console.log("🎉 Pipeline completed successfully!");
@@ -196,6 +321,9 @@ async function main(): Promise<void> {
           break;
         case "helm-test":
           await helmTest();
+          break;
+        case "deploy-all":
+          await deployAll();
           break;
         case "all":
         default:

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TypeScript/Express.js sample application with a Dagger-based CI/CD pipeline that builds, tests, and deploys to a local Kind Kubernetes cluster. Deployment is managed via Helm charts with multi-environment support (dev/staging/prod).
+TypeScript/Express.js sample application with a Dagger-based CI/CD pipeline that builds, tests, and deploys to either a local Kind Kubernetes cluster or AWS EKS (via CDK). Deployment is managed via Helm charts with multi-environment support (dev/staging/prod). EKS uses a single cluster with namespace-per-environment isolation, ECR for images/charts, and AWS ALB ingress.
 
 ## Commands
 
@@ -61,10 +61,49 @@ Requires a Kind cluster named `dagger-demo` with a local Docker registry on `loc
 
 **IMPORTANT**: Always use the local `kind.yaml` config file and shell commands to manage the Kind cluster. Do NOT use the k8s-kind MCP server — use `kind create cluster --name dagger-demo --config kind.yaml` and related CLI commands directly via Bash.
 
+## EKS Deployment
+
+```bash
+# Setup EKS cluster (VPC, ECR, EKS, ALB controller, namespaces)
+./scripts/setup-eks.sh
+
+# Deploy to all environments (dev -> staging -> prod)
+source .env.eks && cd dagger && npm run pipeline:deploy-all
+
+# Full pipeline with EKS (lint -> test -> chart-lint -> build -> deploy-all)
+source .env.eks && cd dagger && npm run pipeline
+
+# Individual EKS deploy to a specific environment
+source .env.eks && DEPLOY_ENV=staging cd dagger && npm run pipeline:deploy
+
+# Teardown EKS cluster and all AWS resources
+./scripts/teardown-eks.sh
+
+# CDK commands (from cdk/ directory)
+cd cdk && npx cdk synth      # Synthesize CloudFormation template
+cd cdk && npx cdk diff       # Preview changes
+cd cdk && npx cdk deploy     # Deploy stack
+cd cdk && npx cdk destroy    # Destroy stack
+```
+
+EKS environment variables (set by `source .env.eks`):
+- `DEPLOYMENT_TARGET` — `kind` (default) or `eks`
+- `AWS_ACCOUNT_ID` — AWS account ID
+- `AWS_REGION` — AWS region (default: `us-east-1`)
+- `ECR_REPO_URI` — ECR repository URI for the sample-app image
+- `EKS_CLUSTER_NAME` — EKS cluster name
+
+**CDK Stack** (`cdk/`): Single stack with VPC (2 AZs, 1 NAT), ECR repo, EKS cluster (K8s 1.31, t3.medium nodes), AWS Load Balancer Controller (Helm + IRSA), and 3 namespaces (dev/staging/prod). Uses `@aws-cdk/lambda-layer-kubectl-v31` for kubectl.
+
+**EKS Environment Config** (`environments/eks-*.yaml`): Per-environment values with ALB ingress annotations (`alb` ingressClassName, `internet-facing` scheme, `ip` target-type). Uses `${ECR_REPO_URI}` placeholder substituted at deploy time.
+
 ## Key Patterns
 
 - The Dagger pipeline has its own `package.json` and `tsconfig.json` under `dagger/` — install deps there separately (`cd dagger && npm install`)
-- Pipeline accepts a command argument (`lint`, `test`, `chart-lint`, `build`, `deploy`, `helm-test`, or `all`) to run individual stages
+- Pipeline accepts a command argument (`lint`, `test`, `chart-lint`, `build`, `deploy`, `helm-test`, `deploy-all`, or `all`) to run individual stages
+- `deploy-all` rolls through dev → staging → prod, deploying and helm-testing each in sequence
+- `DEPLOYMENT_TARGET` env var (`kind` or `eks`) controls registry, values files, release naming, and namespace behavior — defaults to `kind` for full backward compatibility
+- CDK infrastructure lives in `cdk/` with its own `package.json` — install deps there separately (`cd cdk && npm install`)
 - The Express server skips binding to a port during test execution
 - Environment values files live in `environments/`, not inside the Helm chart — the chart is built once and environment config is applied as an overlay at deploy time
 - Helm values follow progressive enhancement: dev < staging < prod

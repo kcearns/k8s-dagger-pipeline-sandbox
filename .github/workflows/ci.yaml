@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install pipeline dependencies
+        run: cd dagger && npm ci
+
+      - name: Install Dagger CLI
+        uses: dagger/dagger-for-github@v7
+        with:
+          install-only: true
+
+      - name: Lint
+        run: cd dagger && npm run pipeline:lint
+
+      - name: Test
+        run: cd dagger && npm run pipeline:test
+
+      - name: Chart Lint
+        run: cd dagger && npm run pipeline:chart-lint

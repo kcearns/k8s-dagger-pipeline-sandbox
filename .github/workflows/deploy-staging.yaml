@@ -1,0 +1,17 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [staging]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yaml
+    with:
+      environment: staging
+      deploy_env: staging
+    secrets: inherit
