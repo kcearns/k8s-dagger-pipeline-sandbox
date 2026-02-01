@@ -9,8 +9,13 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    uses: ./.github/workflows/build.yaml
+    secrets: inherit
+
   deploy:
-    uses: ./.github/workflows/deploy.yaml
+    needs: build
+    uses: ./.github/workflows/deploy-env.yaml
     with:
       environment: staging
       deploy_env: staging

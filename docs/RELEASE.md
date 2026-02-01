@@ -2,6 +2,20 @@
 
 This document describes the complete release process for shipping changes from your local machine to production on EKS. It covers the day-to-day workflow, what happens at each stage, how to handle failures, and how to roll back.
 
+## GitHub Environment Setup (Required)
+
+The production deployment workflow requires a GitHub Environment named `production` with required reviewers configured. Without this, the approval gate in the CI/CD pipeline will pass through without waiting for human sign-off.
+
+To set this up:
+
+1. Go to your GitHub repo → **Settings** → **Environments**
+2. Click **New environment**, name it `production`
+3. Check **Required reviewers** and add the users or teams who should approve production deploys
+4. Optionally configure **Wait timer** (e.g., 5 minutes) to add a cooldown before deployment starts after approval
+5. Optionally restrict **Deployment branches** to `main` only
+
+You should also create `dev` and `staging` environments (no approval required) so that deploy history and status are visible in the GitHub UI for those environments.
+
 ## Overview
 
 A release moves through four phases:
@@ -248,7 +262,7 @@ The pipeline handles build, push, deploy, and smoke testing. These things are ou
 
 - **Git tagging / GitHub releases** — Tag your repo manually or via CI when you decide something is a release.
 - **Changelog generation** — Not automated. Write changelogs as part of your PR process.
-- **Approval gates between environments** — The `deploy-all` command rolls straight through dev -> staging -> prod without pausing. If you need manual approval between environments, deploy them individually (`pipeline:deploy` with `DEPLOY_ENV`).
+- **Approval gates between environments** — The CI/CD pipeline requires manual approval before deploying to production (via the GitHub `production` environment — see [GitHub Environment Setup](#github-environment-setup-required) above). The local `deploy-all` command still rolls straight through without pausing; the gate only applies to GitHub Actions workflows.
 - **DNS / TLS** — ALB creates a DNS hostname automatically, but mapping that to a friendly domain (e.g., `app.example.com`) and provisioning TLS certificates is handled outside this pipeline (Route 53, ACM, or your DNS provider).
 - **Monitoring and alerting** — The pipeline runs Helm tests (in-cluster health check) but does not set up CloudWatch, Datadog, or any observability stack.
 - **Database migrations** — If your app has a database, run migrations before deploying, not as part of the pipeline.

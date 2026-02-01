@@ -1,4 +1,4 @@
-name: Deploy (reusable)
+name: Deploy to environment (reusable)
 
 on:
   workflow_call:
@@ -60,24 +60,6 @@ jobs:
 
       - name: Set image tag
         run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-
-      - name: Lint
-        run: cd dagger && npm run pipeline:lint
-
-      - name: Test
-        run: cd dagger && npm run pipeline:test
-
-      - name: Chart Lint
-        run: cd dagger && npm run pipeline:chart-lint
-
-      - name: Build & Push
-        run: cd dagger && npm run pipeline:build
-        env:
-          DEPLOYMENT_TARGET: eks
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          ECR_REPO_URI: ${{ secrets.ECR_REPO_URI }}
-          EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
 
       - name: Deploy
         run: cd dagger && npm run pipeline:deploy
